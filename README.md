@@ -9,16 +9,16 @@
 > Replace these with actual screenshots and adjust the paths accordingly.
 
 ### 🔍 Home Page  
-![Home Page](![Screenshot 2025-05-21 164341](https://github.com/user-attachments/assets/aac26bbf-2265-49cc-a30f-413a2b507a04)
-)
+(![Screenshot 2025-05-21 164341](https://github.com/user-attachments/assets/aac26bbf-2265-49cc-a30f-413a2b507a04)
+
 
 ### 📤 Upload Documents  
-![Upload Docs](![Screenshot 2025-05-21 164929](https://github.com/user-attachments/assets/35189f5b-4b70-4776-afe5-fdeddb8acd0d)
-)
+(![Screenshot 2025-05-21 164929](https://github.com/user-attachments/assets/35189f5b-4b70-4776-afe5-fdeddb8acd0d)
+
 
 ### 💬 Ask Questions  
-![Ask Questions](![Screenshot 2025-05-21 165927](https://github.com/user-attachments/assets/dcc9c28c-f407-4618-a86c-958a13eed714)
-)
+(![Screenshot 2025-05-21 165927](https://github.com/user-attachments/assets/dcc9c28c-f407-4618-a86c-958a13eed714)
+
 
 ---
 
