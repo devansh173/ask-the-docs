@@ -6,7 +6,6 @@
 
 ## 📸 Screenshots
 
-> Replace these with actual screenshots and adjust the paths accordingly.
 
 ### 🔍 Home Page  
 (![Screenshot 2025-05-21 164341](https://github.com/user-attachments/assets/aac26bbf-2265-49cc-a30f-413a2b507a04)
