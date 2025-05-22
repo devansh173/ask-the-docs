@@ -94,7 +94,7 @@ You can access the **Ask the Docs** app here:
   - Cloud-hosted server for running the app
 - **Elastic IP**
   - To maintain a fixed public IP address
-- **tmux / nohup**
+- **nohup**
   - To keep the app running after SSH logout
 
 
