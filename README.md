@@ -1,8 +1,14 @@
 # 🧠 Ask the Docs
 
-**Ask the Docs** is a Retrieval-Augmented Generation (RAG) application built using **Streamlit**, allowing users to ask natural language questions over a set of documents. It leverages embeddings and a vector database to provide accurate, context-aware answers. This app is deployed on an AWS EC2 instance.
+**Ask the Docs** is a Retrieval-Augmented Generation (RAG) application built using **Streamlit**, allowing users to ask natural language questions over a set of documents. It leverages embeddings and a vector database to provide accurate, context-aware answers. 
 
 ---
+
+## 🔗 Project Link
+
+You can access the **Ask the Docs** app here:  
+👉 [Ask the Docs App](http://51.21.203.210:8501/)
+
 
 ## 📸 Screenshots
 
