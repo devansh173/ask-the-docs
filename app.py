@@ -2,7 +2,7 @@ import streamlit as st
 from utils import load_text
 from rag_chain import build_qa_chain
 
-# ✅ Must be the first Streamlit command
+# ✅ First Streamlit command
 st.set_page_config(page_title="Ask the Docs", page_icon="📄", layout="wide")
 
 # 🔁 Session state initialization
@@ -10,6 +10,8 @@ if 'history' not in st.session_state:
     st.session_state['history'] = []
 if 'docs' not in st.session_state:
     st.session_state['docs'] = []
+if 'qa_chain' not in st.session_state:
+    st.session_state['qa_chain'] = None
 
 st.title("📄 Ask the Docs – RAG App")
 
@@ -22,26 +24,32 @@ with tab1:
     uploaded_files = st.file_uploader("Choose files", type=['pdf', 'txt'], accept_multiple_files=True)
 
     if uploaded_files:
-        for uploaded_file in uploaded_files:
-            text = load_text(uploaded_file)
-            st.session_state.docs.append(text)
+        with st.spinner("📚 Loading documents..."):
+            texts = [load_text(f) for f in uploaded_files]
+            st.session_state.docs.extend(texts)
+
+            combined_text = "\n".join(st.session_state.docs)
+            st.session_state.qa_chain = build_qa_chain(combined_text)
+
         st.success(f"✅ Successfully loaded {len(uploaded_files)} file(s).")
 
 # ❓ Ask Questions Tab
 with tab2:
     st.header("Ask a question about your document(s)")
+
     if not st.session_state.docs:
         st.info("👆 Please upload at least one document first.")
     else:
         question = st.text_input("🧠 Enter your question:")
 
         if st.button("Get Answer") and question:
-            with st.spinner("🔍 Thinking..."):
-                combined = "\n".join(st.session_state.docs)
-                qa_chain = build_qa_chain(combined)
-                answer = qa_chain.run(question)
+            if not st.session_state.qa_chain:
+                st.warning("⚠️ QA chain not ready. Please re-upload your documents.")
+            else:
+                with st.spinner("🔍 Thinking..."):
+                    answer = st.session_state.qa_chain.run(question)
 
-                # ✅ Visible Answer Box
+                # ✅ Show answer
                 st.markdown(f"**Q:** {question}")
                 st.markdown(
                     f"""
