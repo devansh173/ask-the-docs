@@ -1,0 +1,10 @@
+# ---------------------------------------------------------------------------
+# "quality" model profile: Qwen3-Embedding-0.6B + BGE-reranker-v2-m3 via torch.
+# Install on top of requirements.txt. Adds ~2 GB of wheels + ~4.7 GB of weights.
+# Not installed on the deployed demo, which runs the lite profile.
+# ---------------------------------------------------------------------------
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.14.0
+sentence-transformers==6.1.0
+transformers==5.17.0
