@@ -290,6 +290,17 @@ class Settings:
     )
     grader_model: str = os.getenv("GRADER_MODEL", "claude-sonnet-5")
     max_tokens: int = _env_int("LLM_MAX_TOKENS", 2048)
+    # How many sibling models to fall back through on a quota refusal, on top
+    # of the configured one. Free-tier quotas are metered per model, so a
+    # provider with several models effectively multiplies its daily allowance
+    # by this many. 0 disables fallback and restores the old single-model
+    # behaviour.
+    #
+    # Set to 3 (chain length 4) rather than a smaller number because building
+    # this project's eval harness against Gemini's free tier found that which
+    # models are actually available shifts during a single day of ordinary
+    # testing - a chain of 2 models was not enough headroom in practice.
+    max_fallbacks: int = _env_int("LLM_MAX_FALLBACKS", 3)
 
     # --- observability -----------------------------------------------------
     langfuse_enabled: bool = _env_bool("LANGFUSE_ENABLED", True)

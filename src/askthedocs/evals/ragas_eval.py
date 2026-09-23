@@ -112,14 +112,25 @@ def score_with_ragas(
     try:
         from ragas import EvaluationDataset, SingleTurnSample, evaluate
         from ragas.llms import LangchainLLMWrapper
+        from ragas.run_config import RunConfig
 
-        from ..llm import build_chat_model
+        from ..llm import build_chat_model, resolve_provider
 
-        judge_chat = build_chat_model(
-            judge_provider or settings.grader_provider,
-            judge_model or settings.grader_model,
-            max_tokens=1024,
-        )
+        provider = resolve_provider(judge_provider or settings.grader_provider)
+        primary_name = judge_model or settings.grader_model
+        judge_chat = build_chat_model(provider, primary_name, max_tokens=1024)
+
+        # NOT wrapped in with_fallbacks(): tried it, and RAGAS reaches into the
+        # model object for a `.temperature` attribute that a RunnableWithFallbacks
+        # does not expose ("RunnableWithFallbacks object has no field
+        # temperature"), which fails every single judging call rather than
+        # falling back. Confirmed the wrapper constructs fine and that a plain
+        # .invoke() through it recovers correctly - the break is specific to
+        # whatever attribute access RAGAS's own executor does internally, and
+        # was only caught by running a real judged evaluation, not by
+        # constructing the object or calling it directly. Left as a single
+        # model until that is fixed properly; the graph's own generation and
+        # grading calls (call_with_fallback, in llm.py) are unaffected.
         judge = LangchainLLMWrapper(judge_chat)
         embeddings = LocalEmbeddings(settings)
 
@@ -140,11 +151,20 @@ def score_with_ragas(
             len(usable),
             judge_model or settings.grader_model,
         )
+        # RAGAS defaults to 16 concurrent judge calls (RunConfig.max_workers).
+        # Free-tier Gemini caps flash-lite class models at 15 requests/MINUTE
+        # (a separate, tighter limit than the daily cap), so the default fired
+        # past it instantly: 461 429s in three minutes on one run here, with
+        # judgements that timed out counted as failures rather than zeros (see
+        # _summarise) but still missing from the result. Capping concurrency
+        # to comfortably under the per-minute limit trades wall-clock time for
+        # actually finishing.
         result = evaluate(
             dataset=dataset,
             metrics=_build_metrics(judge, embeddings),
             show_progress=True,
             raise_exceptions=False,
+            run_config=RunConfig(max_workers=4, max_wait=90, timeout=240),
         )
     except Exception as exc:
         log.error("RAGAS scoring failed: %s", exc)

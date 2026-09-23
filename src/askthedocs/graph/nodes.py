@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from ..config import Settings
-from ..llm import LLMBundle
+from ..llm import LLMBundle, call_with_fallback
 from ..retrieval import store
 from ..retrieval.encoders import get_reranker
 from ..retrieval.schema import Hit
@@ -71,16 +71,23 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def call_structured(model, schema: type[BaseModel], system: str, user: str):
+def call_structured(
+    chain: list[tuple[str, Any]], schema: type[BaseModel], system: str, user: str
+) -> tuple[BaseModel | None, str | None]:
     """Ask for a structured answer, degrading to JSON parsing if need be.
 
-    Returns a schema instance, or None if the model produced nothing usable -
-    callers must treat None as "check failed" and decide a safe default rather
-    than crashing the request.
+    Returns ``(result, model_name)``. ``result`` is None if every model in the
+    chain produced nothing usable - callers must treat that as "check failed"
+    and choose a safe default rather than crashing the request. ``model_name``
+    is the model that actually answered, which can differ from ``chain[0]`` if
+    earlier models in the chain refused on quota.
     """
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     try:
-        return model.with_structured_output(schema).invoke(messages)
+        result, used = call_with_fallback(
+            chain, lambda m: m.with_structured_output(schema).invoke(messages)
+        )
+        return result, used
     except Exception as exc:
         log.debug("structured output failed (%s); retrying with json parsing", exc)
 
@@ -90,12 +97,12 @@ def call_structured(model, schema: type[BaseModel], system: str, user: str):
         HumanMessage(content=user),
     ]
     try:
-        raw = model.invoke(messages)
+        raw, used = call_with_fallback(chain, lambda m: m.invoke(messages))
         payload = _extract_json(message_text(raw))
-        return schema.model_validate(payload) if payload else None
+        return (schema.model_validate(payload) if payload else None), used
     except Exception as exc:
         log.warning("structured fallback failed for %s: %s", schema.__name__, exc)
-        return None
+        return None, None
 
 
 def message_text(response: Any) -> str:
@@ -179,6 +186,18 @@ def _event(name: str, started: float, **details: Any) -> dict:
     return {"node": name, "ms": round((time.perf_counter() - started) * 1000, 1), **details}
 
 
+def _fallback_kwargs(used: str | None, configured: str) -> dict:
+    """``{"fallback_from": configured}`` when a fallback actually fired.
+
+    Surfaced in the event trace (and from there, the UI) so a quota-driven
+    model switch is visible rather than silently changing which model answered
+    a given query.
+    """
+    if used and used != configured:
+        return {"fallback_from": configured}
+    return {}
+
+
 # --------------------------------------------------------------------------- #
 # Nodes
 # --------------------------------------------------------------------------- #
@@ -187,8 +206,8 @@ def analyze_query(state: GraphState, deps: Deps) -> dict:
     started = time.perf_counter()
     question = state["question"]
 
-    analysis = call_structured(
-        deps.llms.grader, QueryAnalysis, prompts.QUERY_ANALYSIS_SYSTEM, question
+    analysis, used = call_structured(
+        deps.llms.grader_models(), QueryAnalysis, prompts.QUERY_ANALYSIS_SYSTEM, question
     )
     if analysis is None:
         # Analysis is an optimisation, not a gate - fall through on the raw text.
@@ -209,6 +228,8 @@ def analyze_query(state: GraphState, deps: Deps) -> dict:
                 intent=analysis.intent,
                 rewritten=query != question,
                 query=query,
+                model=used,
+                **_fallback_kwargs(used, deps.llms.grader_model),
             )
         ],
     }
@@ -320,8 +341,8 @@ def grade_documents(state: GraphState, deps: Deps) -> dict:
         f"Question:\n{state['question']}\n\n"
         f"Retrieved passages:\n{format_passages(hits, max_chars=1200)}"
     )
-    grade = call_structured(
-        deps.llms.grader, RelevanceGrade, prompts.GRADE_SYSTEM, user
+    grade, used = call_structured(
+        deps.llms.grader_models(), RelevanceGrade, prompts.GRADE_SYSTEM, user
     )
     if grade is None:
         # Fail open: a broken grader should not block an answer the user can
@@ -345,6 +366,8 @@ def grade_documents(state: GraphState, deps: Deps) -> dict:
                 sufficient=sufficient,
                 score=round(grade.score, 3),
                 reason=grade.reason,
+                model=used,
+                **_fallback_kwargs(used, deps.llms.grader_model),
             )
         ],
     }
@@ -359,16 +382,24 @@ def rewrite_query(state: GraphState, deps: Deps) -> dict:
         f"Queries already tried:\n{previous}\n\n"
         f"Why the last attempt failed: {state.get('grade_reason', 'no relevant passages')}"
     )
-    response = deps.llms.grader.invoke(
-        [SystemMessage(content=prompts.QUERY_REWRITE_SYSTEM), HumanMessage(content=user)]
-    )
-    new_query = message_text(response).strip('"')
-    new_query = new_query.split("\n")[0][:400] or state["question"]
+    messages = [SystemMessage(content=prompts.QUERY_REWRITE_SYSTEM), HumanMessage(content=user)]
+    try:
+        response, used = call_with_fallback(deps.llms.grader_models(), lambda m: m.invoke(messages))
+        new_query = message_text(response).strip('"')
+        new_query = new_query.split("\n")[0][:400] or state["question"]
+    except Exception as exc:
+        log.warning("rewrite_query failed on every model in the chain: %s", exc)
+        new_query, used = state["question"], None
 
     return {
         "query": new_query,
         "rewrites": [new_query],
-        "events": [_event("rewrite_query", started, query=new_query)],
+        "events": [
+            _event(
+                "rewrite_query", started, query=new_query, model=used,
+                **_fallback_kwargs(used, deps.llms.grader_model),
+            )
+        ],
     }
 
 
@@ -393,9 +424,8 @@ def generate(state: GraphState, deps: Deps) -> dict:
             unsupported=state.get("groundedness_reason", "")
         )
 
-    response = deps.llms.generator.invoke(
-        [SystemMessage(content=system), HumanMessage(content=user)]
-    )
+    messages = [SystemMessage(content=system), HumanMessage(content=user)]
+    response, used = call_with_fallback(deps.llms.generator_models(), lambda m: m.invoke(messages))
     answer = message_text(response)
 
     cited = _cited_indices(answer, len(hits))
@@ -421,10 +451,11 @@ def generate(state: GraphState, deps: Deps) -> dict:
             _event(
                 "generate",
                 started,
-                model=deps.llms.generator_model,
+                model=used,
                 passages=len(hits),
                 cited=len(cited),
                 chars=len(answer),
+                **_fallback_kwargs(used, deps.llms.generator_model),
             )
         ],
     }
@@ -443,8 +474,8 @@ def check_groundedness(state: GraphState, deps: Deps) -> dict:
         f"Answer:\n{answer}\n\n"
         f"Source passages:\n{format_passages(hits, max_chars=1400)}"
     )
-    check = call_structured(
-        deps.llms.grader, GroundednessCheck, prompts.GROUNDEDNESS_SYSTEM, user
+    check, used = call_structured(
+        deps.llms.grader_models(), GroundednessCheck, prompts.GROUNDEDNESS_SYSTEM, user
     )
     if check is None:
         return {
@@ -463,6 +494,8 @@ def check_groundedness(state: GraphState, deps: Deps) -> dict:
                 grounded=check.grounded,
                 unsupported=len(check.unsupported),
                 reason=check.reason,
+                model=used,
+                **_fallback_kwargs(used, deps.llms.grader_model),
             )
         ],
     }

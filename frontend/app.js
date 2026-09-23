@@ -163,6 +163,11 @@ function stepMeta(ev) {
   if (ev.cited != null) parts.push(`${ev.cited} citations`);
   if (ev.attempt > 1) parts.push(`attempt ${ev.attempt}`);
   if (ev.skipped) parts.push(String(ev.skipped));
+  // fallback_from is only set when the configured model refused on quota and
+  // a sibling model answered instead - worth calling out rather than letting
+  // a silent model switch hide in the trace.
+  if (ev.fallback_from) parts.push(`${ev.model} ⤺ (${ev.fallback_from} exhausted)`);
+  else if (ev.model) parts.push(ev.model);
   return parts.join(" · ");
 }
 

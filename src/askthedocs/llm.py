@@ -14,6 +14,18 @@ deployed demo and the eval harness run.
 Constructor kwargs are mapped per provider rather than relying on
 ``init_chat_model`` to normalise them, because the three cloud providers each
 spell the key and the output-token cap differently.
+
+**Automatic fallback across sibling models.** Free-tier quotas are metered per
+model, discovered the hard way while evaluating this project against Gemini's
+free tier: gemini-2.5-flash-lite is capped at 20 requests/day, and even a
+current model's per-*minute* cap (15 RPM at one point) can be blown through by
+a judge library's default concurrency. ``build_bundle`` therefore builds each
+role (generator, grader) as a *chain* - the configured model first, then up to
+``settings.max_fallbacks`` other models from the same provider - and
+``call_with_fallback`` walks the chain on a quota refusal. A provider whose
+account is simply out of credit fails identically on every model in the chain,
+so this only ever helps with the case it targets; it does not paper over a
+missing key or a genuine service outage.
 """
 
 from __future__ import annotations
@@ -22,11 +34,13 @@ import logging
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from langchain_core.language_models import BaseChatModel
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -65,24 +79,35 @@ PROVIDERS: dict[str, ProviderSpec] = {
         env_key="GOOGLE_API_KEY",
         key_field="google_api_key",
         max_tokens_field="max_output_tokens",
+        # Ordered flash-lite-first: probing this account's actual quotas found
+        # gemini-3.1-flash-lite capped at 500 requests/day against
+        # gemini-3.6-flash's 20/day - the opposite of "newer or non-lite means
+        # more quota". That is an observed pattern on one account on one day,
+        # not a documented guarantee, and it visibly changes: gemini-2.5-flash-lite
+        # measured at 20/day earlier the same day this comment was written and
+        # was back to answering within the hour. Static ordering is a mild
+        # preference at best - build_bundle's fallback chain is what actually
+        # copes with whichever models happen to be exhausted right now.
         models=(
-            "gemini-3.1-pro-preview",
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
             "gemini-flash-lite-latest",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash",
+            "gemini-3.6-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-2.5-pro",
         ),
-        default_model="gemini-3.5-flash",
+        default_model="gemini-3.5-flash-lite",
         package="langchain_google_genai",
         notes=(
-            "Free-tier quota is per model per day, so pointing LLM_MODEL and "
-            "GRADER_MODEL at different models doubles the effective allowance. "
-            "Avoid gemini-2.5-flash-lite: superseded, and capped at 20/day."
+            "Free-tier quota is metered per model per day, and how much varies "
+            "by model in ways that are not documented and shift over time - "
+            "the app falls back across sibling models automatically on a "
+            "quota refusal (LLM_MAX_FALLBACKS) rather than relying on a fixed "
+            "'good model' list."
         ),
     ),
     "openai": ProviderSpec(
@@ -145,6 +170,60 @@ def resolve_provider(name: str | None) -> str:
 
 class LLMConfigError(RuntimeError):
     """Raised when a provider cannot be constructed - surfaced to the UI as 400."""
+
+
+class AllFallbacksExhausted(RuntimeError):
+    """Every model in a fallback chain refused on quota."""
+
+
+# Provider-agnostic substrings for "you are out of quota" - as opposed to a
+# transient network error or a bad request, neither of which a different model
+# on the same account would fix. Matched case-insensitively against the
+# exception's str(), since each SDK raises its own exception class.
+_QUOTA_MARKERS = (
+    "resource_exhausted",
+    "exceeded your current quota",
+    "insufficient_quota",
+    "quota exceeded",
+    "rate_limit_exceeded",
+    "billing",
+    "credit balance is too low",
+)
+
+
+def is_quota_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _QUOTA_MARKERS)
+
+
+def call_with_fallback(
+    chain: list[tuple[str, BaseChatModel]],
+    fn: Callable[[BaseChatModel], T],
+) -> tuple[T, str]:
+    """Run ``fn`` against each model in ``chain`` in order.
+
+    Returns ``(result, model_name)`` from the first model that does not raise a
+    quota-shaped error. A non-quota error propagates immediately rather than
+    burning through the rest of the chain - a bad prompt or a malformed
+    response is not fixed by trying a different model, and hiding it behind
+    three retries would only slow down the real failure.
+    """
+    if not chain:
+        raise ValueError("call_with_fallback needs at least one (name, model) pair")
+
+    last_exc: BaseException | None = None
+    for name, model in chain:
+        try:
+            return fn(model), name
+        except Exception as exc:
+            if not is_quota_error(exc):
+                raise
+            log.warning("%s refused on quota, falling back", name)
+            last_exc = exc
+
+    raise AllFallbacksExhausted(
+        f"every model in the chain refused on quota: {[n for n, _ in chain]}"
+    ) from last_exc
 
 
 def provider_catalog() -> list[dict[str, Any]]:
@@ -243,6 +322,13 @@ class LLMBundle:
     query and on every golden question during an eval run, so pointing them at a
     cheaper model is the single biggest lever on what this project costs to
     evaluate. When the caller supplies a provider from the UI, both use it.
+
+    ``generator_chain`` / ``grader_chain`` carry the configured model plus its
+    fallbacks, as ``(model_name, model)`` pairs with the configured one first.
+    They default to empty - ``generator_models()`` / ``grader_models()`` fall
+    back to a single-item chain built from ``generator``/``grader`` when empty,
+    so code built against a bundle that predates fallbacks (tests, mainly)
+    keeps working unchanged.
     """
 
     generator: BaseChatModel
@@ -250,6 +336,53 @@ class LLMBundle:
     provider: str
     generator_model: str
     grader_model: str
+    generator_chain: list[tuple[str, BaseChatModel]] = field(default_factory=list)
+    grader_chain: list[tuple[str, BaseChatModel]] = field(default_factory=list)
+
+    def generator_models(self) -> list[tuple[str, BaseChatModel]]:
+        return self.generator_chain or [(self.generator_model, self.generator)]
+
+    def grader_models(self) -> list[tuple[str, BaseChatModel]]:
+        return self.grader_chain or [(self.grader_model, self.grader)]
+
+
+def _fallback_chain(
+    provider: str,
+    spec: ProviderSpec,
+    primary_model: str,
+    primary: BaseChatModel,
+    *,
+    api_key: str | None,
+    max_tokens: int,
+    max_fallbacks: int,
+) -> list[tuple[str, BaseChatModel]]:
+    """The primary model plus up to ``max_fallbacks`` siblings from ``spec``.
+
+    Siblings are taken in the provider's declared order (roughly
+    best-to-cheapest) and skip the primary itself. Each is a live client
+    object, but constructing one does not make a network call for any provider
+    here, so building the whole chain eagerly costs nothing until it is used.
+    A sibling that fails to construct (missing optional package, for instance)
+    is skipped rather than aborting the whole chain.
+    """
+    chain: list[tuple[str, BaseChatModel]] = [(primary_model, primary)]
+    if max_fallbacks <= 0:
+        return chain
+
+    for candidate in spec.models:
+        if len(chain) - 1 >= max_fallbacks:
+            break
+        if candidate == primary_model:
+            continue
+        try:
+            model_obj = build_chat_model(
+                provider, candidate, api_key=api_key, max_tokens=max_tokens
+            )
+        except LLMConfigError as exc:
+            log.debug("skipping fallback candidate %s: %s", candidate, exc)
+            continue
+        chain.append((candidate, model_obj))
+    return chain
 
 
 def build_bundle(
@@ -281,10 +414,23 @@ def build_bundle(
     grader = build_chat_model(
         provider, grader_model, api_key=api_key, max_tokens=1024
     )
+
+    max_fallbacks = getattr(settings, "max_fallbacks", 2)
+    generator_chain = _fallback_chain(
+        provider, spec, gen_model, generator,
+        api_key=api_key, max_tokens=settings.max_tokens, max_fallbacks=max_fallbacks,
+    )
+    grader_chain = _fallback_chain(
+        provider, spec, grader_model, grader,
+        api_key=api_key, max_tokens=1024, max_fallbacks=max_fallbacks,
+    )
+
     return LLMBundle(
         generator=generator,
         grader=grader,
         provider=provider,
         generator_model=gen_model,
         grader_model=grader_model,
+        generator_chain=generator_chain,
+        grader_chain=grader_chain,
     )
