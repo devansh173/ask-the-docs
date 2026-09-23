@@ -1,0 +1,71 @@
+# Full local stack: Qdrant server + the API/frontend.
+#
+# The app does not need this file to run. With no QDRANT_URL set it uses
+# Qdrant's embedded local mode against ./data/qdrant, which is the default
+# precisely so the project starts on a laptop with no Docker installed.
+#
+# Bring this up when you want the real server: the indexed sparse path drops
+# zero-score matches (local mode keeps them), payload indexes actually take
+# effect, and it is the configuration the deployed demo runs against.
+#
+#   docker compose up -d
+#   QDRANT_URL=http://localhost:6333 askthedocs index --recreate
+#
+# Langfuse is deliberately NOT here - see docker-compose.langfuse.yml.
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.16.1
+    container_name: askthedocs-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST + dashboard at http://localhost:6333/dashboard
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__ENABLE_TLS: "false"
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      # The image is distroless, so use Qdrant's own readiness endpoint via the
+      # bundled entrypoint rather than curl, which is not installed.
+      test: ["CMD", "/qdrant/qdrant", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: askthedocs-api
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-askthedocs}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-small}
+      RERANKER_MODEL: ${RERANKER_MODEL:-none}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_MODEL: ${LLM_MODEL:-claude-opus-5}
+      GRADER_MODEL: ${GRADER_MODEL:-claude-sonnet-5}
+      # Optional - the UI can also supply a key per request.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      # Cache model weights across restarts - a cold start otherwise
+      # re-downloads ~1 GB of ONNX before the first request can be served.
+      - model_cache:/home/app/.cache
+
+volumes:
+  qdrant_storage:
+  model_cache:
