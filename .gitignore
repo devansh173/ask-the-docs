@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+.env.local
+
+# Generated data. The corpus and index are rebuildable from `askthedocs scrape`
+# + `askthedocs index`; the golden set under data/golden IS tracked.
+data/raw/
+data/qdrant/
+data/uploads/
+evals_out/
+index_run.log
+
+# Model caches
+.fastembed_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Eval + tooling artefacts
+eval_run.log
+.deepeval
+.deepeval-cache.json
