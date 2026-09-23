@@ -1,8 +1,38 @@
-streamlit
-langchain
-langchain-community
-sentence-transformers
-faiss-cpu
-transformers
-torch
-PyPDF2
+# ---------------------------------------------------------------------------
+# Core runtime. This set alone runs the full agentic pipeline in the "lite"
+# model profile (ONNX/CPU, no torch). Versions verified against PyPI 2026-09-22.
+# ---------------------------------------------------------------------------
+
+# --- Vector store + retrieval -------------------------------------------------
+qdrant-client==1.19.1          # Query API: prefetch + RRF fusion, native hybrid
+fastembed==0.8.0               # ONNX CPU embeddings, BM25 sparse, cross-encoders
+
+# --- Orchestration ------------------------------------------------------------
+langgraph==1.2.12
+langchain==1.4.2
+langchain-core==1.6.4
+langchain-text-splitters==1.1.2
+
+# --- LLM providers (user-selectable from the frontend) ------------------------
+langchain-anthropic==1.7.2     # default
+langchain-google-genai==4.4.0
+langchain-openai==1.6.3
+langchain-ollama==1.1.0
+
+# --- API ----------------------------------------------------------------------
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32   # multipart form parsing for file uploads
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# --- Observability ------------------------------------------------------------
+langfuse==4.15.4
+
+# --- Ingestion ----------------------------------------------------------------
+httpx==0.28.1
+beautifulsoup4==4.15.0
+markdownify==1.2.3
+pypdf==6.19.0
+tqdm==4.70.1
+rich==15.0.0

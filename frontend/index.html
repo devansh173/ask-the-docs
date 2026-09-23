@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask the Docs</title>
+<meta name="description" content="Agentic RAG with hybrid retrieval, reranking and self-correction — over built-in documentation or your own files.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="sidebar" id="sidebar">
+  <header class="brand">
+    <h1>Ask the Docs</h1>
+    <p>Hybrid retrieval, cross-encoder reranking and a self-correcting graph — over the built-in docs or your own files.</p>
+  </header>
+
+  <!-- ---------------------------------------------------------- corpus -->
+  <section class="panel">
+    <h2>Corpus</h2>
+    <div class="segmented" role="tablist">
+      <button class="seg active" data-corpus="docs" role="tab" type="button">Built-in docs</button>
+      <button class="seg" data-corpus="uploads" role="tab" type="button">My documents</button>
+    </div>
+
+    <div class="corpus-pane" id="pane-docs">
+      <div class="chips" id="doc-sets">
+        <label class="chip"><input type="checkbox" value="claude-api" checked><span>Claude API</span></label>
+        <label class="chip"><input type="checkbox" value="langgraph" checked><span>LangGraph</span></label>
+        <label class="chip"><input type="checkbox" value="qdrant" checked><span>Qdrant</span></label>
+      </div>
+      <p class="hint" id="docs-hint">Documentation for the stack this app is built on.</p>
+    </div>
+
+    <div class="corpus-pane" id="pane-uploads" hidden>
+      <div class="dropzone" id="dropzone" tabindex="0" role="button"
+           aria-label="Upload documents">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+        </svg>
+        <strong>Drop files or click to browse</strong>
+        <span>PDF, Markdown, TXT, HTML · up to 20 MB each</span>
+        <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.markdown,.html,.htm,.rst" hidden>
+      </div>
+
+      <div class="upload-progress" id="upload-progress" hidden>
+        <div class="bar"><div class="fill" id="upload-fill"></div></div>
+        <span id="upload-status">Reading…</span>
+      </div>
+
+      <ul class="doclist" id="doclist"></ul>
+      <button class="link-btn danger" id="clear-docs" type="button" hidden>Remove all documents</button>
+      <p class="hint" id="upload-hint">
+        Files are chunked and embedded locally, then indexed into their own
+        collection. Nothing is sent anywhere except the LLM call.
+      </p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- retrieval -->
+  <section class="panel">
+    <h2>Retrieval</h2>
+    <label class="field">
+      <span>Embedding model</span>
+      <select id="embedding"></select>
+    </label>
+    <p class="hint" id="embedding-hint"></p>
+
+    <label class="field">
+      <span>Reranker</span>
+      <select id="reranker"></select>
+    </label>
+    <p class="hint" id="reranker-hint"></p>
+  </section>
+
+  <!-- ------------------------------------------------------ generation -->
+  <section class="panel">
+    <h2>Answer model</h2>
+    <label class="field">
+      <span>Provider</span>
+      <select id="provider"></select>
+    </label>
+    <label class="field">
+      <span>Model</span>
+      <select id="model"></select>
+    </label>
+    <label class="field" id="key-field">
+      <span>API key</span>
+      <input type="password" id="api-key" placeholder="sk-…" autocomplete="off" spellcheck="false">
+    </label>
+    <p class="hint" id="key-hint"></p>
+  </section>
+
+  <!-- ---------------------------------------------------------- pipeline -->
+  <section class="panel">
+    <h2>Pipeline</h2>
+    <div class="segmented">
+      <button class="seg active" data-config="agentic" type="button">Agentic</button>
+      <button class="seg" data-config="naive" type="button">Naive</button>
+    </div>
+    <p class="hint" id="config-hint">
+      Hybrid retrieval → rerank → grade → rewrite &amp; retry if weak →
+      generate → groundedness check.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Index</h2>
+    <dl class="status" id="status"><dt>Status</dt><dd>checking…</dd></dl>
+  </section>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <button class="icon-btn" id="menu-btn" aria-label="Settings" type="button">☰</button>
+    <div class="topbar-title">Ask the Docs</div>
+    <button class="icon-btn" id="clear-btn" type="button">Clear</button>
+  </header>
+
+  <div class="thread" id="thread">
+    <div class="welcome" id="welcome">
+      <h2>Ask about the stack this is built on</h2>
+      <p>
+        The built-in index covers the Claude API, LangGraph and Qdrant
+        documentation. Answers cite the passages they came from, and the
+        pipeline shows its work. Switch to <strong>My documents</strong> to ask
+        about your own files instead.
+      </p>
+      <div class="examples" id="examples">
+        <button type="button">How do I combine dense and sparse search in one Qdrant query?</button>
+        <button type="button">What does modifier=IDF do on a sparse vector config?</button>
+        <button type="button">How do conditional edges work in a LangGraph StateGraph?</button>
+        <button type="button">What invalidates a Claude prompt cache?</button>
+      </div>
+    </div>
+  </div>
+
+  <form class="composer" id="composer">
+    <div class="composer-inner">
+      <textarea id="question" rows="1" placeholder="Ask a question…" autocomplete="off"></textarea>
+      <button type="submit" id="send" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6"/>
+        </svg>
+      </button>
+    </div>
+    <p class="composer-note" id="composer-note"></p>
+  </form>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
